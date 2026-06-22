@@ -2727,3 +2727,4 @@ function App() {
 }
 
 export default App;
+[![Netlify Status](https://api.netlify.com/api/v1/badges/41ac7af2-1945-4938-ad82-1af73f12a271/deploy-status)](https://app.netlify.com/projects/califoxglobaltradehost/deploys)
