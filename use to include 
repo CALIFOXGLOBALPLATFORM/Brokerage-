@@ -1,0 +1,409 @@
+Agent
+import { useState, useEffect, useRef, createContext, useContext, useCallback } from "react";
+import { Switch, Route, Router as WouterRouter, Link } from "wouter";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Toaster } from "@/components/ui/toaster";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { useToast } from "@/hooks/use-toast";
+import NotFound from "@/pages/not-found";
+import { motion, AnimatePresence } from "framer-motion";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import * as z from "zod";
+import { TrendingUp, Shield, BarChart2, ChevronRight, Menu, X, Star, MessageCircle, Copy, Check, Gift, Lock, Eye, EyeOff, Settings, LogOut, ExternalLink, RotateCcw, Save, Trash2, Plus, User, UserPlus, Wallet, ArrowDownCircle, ArrowUpCircle, Clock, DollarSign, Activity, Bell } from "lucide-react";
+import { SiTelegram, SiTradingview, SiBinance, SiVisa, SiMastercard, SiBitcoin, SiEthereum, SiTether } from "react-icons/si";
+
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+
+const queryClient = new QueryClient();
+
+// ==========================================
+// Telegram Bot Config
+// Fill in your own values from @BotFather
+// ==========================================
+const TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"; // e.g. "7123456789:AAFxxxxxxxxxxxxxxxx"
+const TELEGRAM_CHAT_ID = "YOUR_CHAT_ID_HERE"; // e.g. "-1001234567890"
+
+// ==========================================
+// Auth System
+// ==========================================
+type Transaction = {
+id: string;
+type: "deposit" | "withdrawal";
+amount: number;
+status: "completed" | "pending";
+date: string;
+note?: string;
+};
+
+type AuthUser = {
+id: string;
+name: string;
+email: string;
+passwordHash: string;
+plan: string;
+balance: number;
+transactions: Transaction[];
+};
+
+type Notification = {
+id: string;
+type: "deposit" | "withdrawal" | "info";
+title: string;
+message: string;
+};
+
+type AuthCtx = {
+user: AuthUser | null;
+login: (email: string, password: string) => boolean;
+register: (name: string, email: string, password: string, plan: string) => boolean;
+logout: () => void;
+addTransaction: (type: "deposit" | "withdrawal", amount: number, note?: string) => void;
+notifications: Notification[];
+pushNotification: (n: Omit<Notification, "id">) => void;
+};
+
+const AuthContext = createContext<AuthCtx | null>(null);
+const USERS_KEY = "califox_users";
+const SESSION_KEY = "califox_session";
+
+function simpleHash(str: string) {
+let h = 0;
+for (let i = 0; i < str.length; i++) h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
+return h.toString(36);
+}
+
+function loadUsers(): AuthUser[] {
+try { return JSON.parse(localStorage.getItem(USERS_KEY) ?? "[]"); } catch { return []; }
+}
+function saveUsers(users: AuthUser[]) {
+localStorage.setItem(USERS_KEY, JSON.stringify(users));
+}
+function loadSession(): AuthUser | null {
+try { const id = sessionStorage.getItem(SESSION_KEY); if (!id) return null;
+return loadUsers().find(u => u.id === id) ?? null; } catch { return null; }
+}
+
+function AuthProvider({ children }: { children: React.ReactNode }) {
+const [user, setUser] = useState<AuthUser | null>(loadSession);
+const [notifications, setNotifications] = useState<Notification[]>([]);
+
+const pushNotification = useCallback((n: Omit<Notification, "id">) => {
+const id = Math.random().toString(36).slice(2);
+setNotifications(prev => [...prev, { ...n, id }]);
+setTimeout(() => setNotifications(prev => prev.filter(x => x.id !== id)), 6000);
+}, []);
+
+const login = useCallback((email: string, password: string) => {
+const users = loadUsers();
+const found = users.find(u => u.email.toLowerCase() === email.toLowerCase() && u.passwordHash === simpleHash(password));
+if (!found) return false;
+sessionStorage.setItem(SESSION_KEY, found.id);
+setUser(found);
+pushNotification({ type: "info", title: "Welcome back!", message: Logged in as ${found.name} });
+return true;
+}, [pushNotification]);
+
+const register = useCallback((name: string, email: string, password: string, plan: string) => {
+const users = loadUsers();
+if (users.find(u => u.email.toLowerCase() === email.toLowerCase())) return false;
+const newUser: AuthUser = {
+id: Math.random().toString(36).slice(2),
+name, email, passwordHash: simpleHash(password), plan,
+balance: 0,
+transactions: [],
+};
+saveUsers([...users, newUser]);
+sessionStorage.setItem(SESSION_KEY, newUser.id);
+setUser(newUser);
+pushNotification({ type: "info", title: "Account created!", message: Welcome to Califox Global, ${name}! });
+return true;
+}, [pushNotification]);
+
+const logout = useCallback(() => {
+sessionStorage.removeItem(SESSION_KEY);
+setUser(null);
+}, []);
+
+const addTransaction = useCallback((type: "deposit" | "withdrawal", amount: number, note?: string) => {
+if (!user) return;
+const tx: Transaction = {
+id: Math.random().toString(36).slice(2),
+type, amount, note,
+status: "completed",
+date: new Date().toISOString(),
+};
+const newBalance = type === "deposit" ? user.balance + amount : Math.max(0, user.balance - amount);
+const updated: AuthUser = { ...user, balance: newBalance, transactions: [tx, ...user.transactions] };
+const users = loadUsers().map(u => u.id === user.id ? updated : u);
+saveUsers(users);
+setUser(updated);
+pushNotification(
+type === "deposit"
+? { type: "deposit", title: "Deposit Successful!", message: $${amount.toLocaleString()} has been added to your account. }
+: { type: "withdrawal", title: "Withdrawal Initiated!", message: $${amount.toLocaleString()} withdrawal is being processed. }
+);
+}, [user, pushNotification]);
+
+return (
+<AuthContext.Provider value={{ user, login, register, logout, addTransaction, notifications, pushNotification }}>
+{children}
+<NotificationStack notifications={notifications} />
+</AuthContext.Provider>
+);
+}
+
+function useAuth() {
+const ctx = useContext(AuthContext);
+if (!ctx) throw new Error("useAuth must be used inside AuthProvider");
+return ctx;
+}
+
+// ==========================================
+// Notification Stack
+// ==========================================
+function NotificationStack({ notifications }: { notifications: Notification[] }) {
+const icons: Record<Notification["type"], React.ReactNode> = {
+deposit: <ArrowDownCircle className="h-5 w-5 text-emerald-400" />,
+withdrawal: <ArrowUpCircle className="h-5 w-5 text-amber-400" />,
+info: <Bell className="h-5 w-5 text-primary" />,
+};
+const colors: Record<Notification["type"], string> = {
+deposit: "border-emerald-500/30 bg-emerald-500/10",
+withdrawal: "border-amber-500/30 bg-amber-500/10",
+info: "border-primary/30 bg-primary/10",
+};
+return (
+<div className="fixed top-24 right-4 z-[200] flex flex-col gap-3 pointer-events-none">
+<AnimatePresence mode="sync">
+{notifications.map(n => (
+<motion.div
+key={n.id}
+initial={{ opacity: 0, x: 80, scale: 0.9 }}
+animate={{ opacity: 1, x: 0, scale: 1 }}
+exit={{ opacity: 0, x: 80, scale: 0.9 }}
+transition={{ duration: 0.3 }}
+className={flex items-start gap-3 rounded-xl border ${colors[n.type]} backdrop-blur-sm px-4 py-3 shadow-xl max-w-xs pointer-events-auto}
+>
+<div className="shrink-0 mt-0.5">{icons[n.type]}</div>
+<div>
+<p className="text-sm font-bold text-foreground">{n.title}</p>
+<p className="text-xs text-muted-foreground mt-0.5">{n.message}</p>
+</div>
+</motion.div>
+))}
+</AnimatePresence>
+</div>
+);
+}
+
+// ==========================================
+// Auth Modal (Login / Register)
+// ==========================================
+function AuthModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+const { login, register } = useAuth();
+const { plans } = usePlans();
+const [tab, setTab] = useState<"login" | "register">("login");
+const [showPw, setShowPw] = useState(false);
+const [error, setError] = useState("");
+
+const loginSchema = z.object({ email: z.string().email(), password: z.string().min(1) });
+const registerSchema = z.object({
+name: z.string().min(2),
+email: z.string().email(),
+password: z.string().min(6),
+plan: z.string().min(1),
+});
+
+const loginForm = useForm({ resolver: zodResolver(loginSchema), defaultValues: { email: "", password: "" } });
+const regForm = useForm({ resolver: zodResolver(registerSchema), defaultValues: { name: "", email: "", password: "", plan: plans[0]?.name ?? "Starter" } });
+
+const onLogin = (v: z.infer<typeof loginSchema>) => {
+const ok = login(v.email, v.password);
+if (!ok) setError("Invalid email or password."); else { setError(""); onClose(); }
+};
+const onRegister = (v: z.infer<typeof registerSchema>) => {
+const ok = register(v.name, v.email, v.password, v.plan);
+if (!ok) setError("An account with this email already exists."); else { setError(""); onClose(); }
+};
+
+if (!open) return null;
+return (
+<div className="fixed inset-0 z-[150] flex items-center justify-center p-4">
+<div className="absolute inset-0 bg-background/80 backdrop-blur-sm" onClick={onClose} />
+<motion.div
+initial={{ opacity: 0, scale: 0.95, y: 20 }}
+animate={{ opacity: 1, scale: 1, y: 0 }}
+exit={{ opacity: 0, scale: 0.95, y: 20 }}
+className="relative w-full max-w-md bg-card border border-border rounded-2xl shadow-2xl p-6 z-10"
+>
+<button onClick={onClose} className="absolute right-4 top-4 text-muted-foreground hover:text-foreground"><X className="h-5 w-5" /></button>
+<div className="text-center mb-6">
+<div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-primary/10 border border-primary/20 mb-3">
+{tab === "login" ? <Lock className="h-5 w-5 text-primary" /> : <UserPlus className="h-5 w-5 text-primary" />}
+</div>
+<h2 className="text-xl font-display font-bold text-foreground">{tab === "login" ? "Sign in to your account" : "Create your account"}</h2>
+</div>
+{/* Tabs */}
+<div className="flex rounded-lg border border-border p-1 mb-6 gap-1">
+{(["login", "register"] as const).map(t => (
+<button key={t} onClick={() => { setTab(t); setError(""); }}
+className={flex-1 py-2 text-sm font-medium rounded-md transition-colors ${tab === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}}>
+{t === "login" ? "Sign In" : "Register"}
+</button>
+))}
+</div>
+{error && <p className="text-xs text-red-400 mb-4 flex items-center gap-1.5"><X className="h-3.5 w-3.5" />{error}</p>}
+
+    {tab === "login" ? (
+      <form onSubmit={loginForm.handleSubmit(onLogin)} className="space-y-4">
+        <div>
+          <label className="text-xs text-muted-foreground mb-1 block">Email</label>
+          <input {...loginForm.register("email")} placeholder="you@example.com" autoComplete="email"
+            className="w-full rounded-lg border border-border bg-background text-foreground px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-primary/30 placeholder:text-muted-foreground" />
+        </div>
+        <div className="relative">
+          <label className="text-xs text-muted-foreground mb-1 block">Password</label>
+          <input {...loginForm.register("password")} type={showPw ? "text" : "password"} placeholder="••••••••" autoComplete="current-password"
+            className="w-full rounded-lg border border-border bg-background text-foreground px-3 py-2.5 pr-10 text-sm outline-none focus:ring-2 focus:ring-primary/30 placeholder:text-muted-foreground" />
+          <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-3 bottom-2.5 text-muted-foreground hover:text-foreground" tabIndex={-1}>
+            {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+          </button>
+        </div>
+        <Button type="submit" className="w-full">Sign In</Button>
+      </form>
+    ) : (
+      <form onSubmit={regForm.handleSubmit(onRegister)} className="space-y-4">
+        <div>
+          <label className="text-xs text-muted-foreground mb-1 block">Full Name</label>
+          <input {...regForm.register("name")} placeholder="John Doe" autoComplete="name"
+            className="w-full rounded-lg border border-border bg-background text-foreground px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-primary/30 placeholder:text-muted-foreground" />
+        </div>
+        <div>
+          <label className="text-xs text-muted-foreground mb-1 block">Email</label>
+          <input {...regForm.register("email")} placeholder="you@example.com" autoComplete="email"
+            className="w-full rounded-lg border border-border bg-background text-foreground px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-primary/30 placeholder:text-muted-foreground" />
+        </div>
+        <div className="relative">
+          <label className="text-xs text-muted-foreground mb-1 block">Password</label>
+          <input {...regForm.register("password")} type={showPw ? "text" : "password"} placeholder="Min. 6 characters" autoComplete="new-password"
+            className="w-full rounded-lg border border-border bg-background text-foreground px-3 py-2.5 pr-10 text-sm outline-none focus:ring-2 focus:ring-primary/30 placeholder:text-muted-foreground" />
+          <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-3 bottom-2.5 text-muted-foreground hover:text-foreground" tabIndex={-1}>
+            {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+          </button>
+        </div>
+        <div>
+          <label className="text-xs text-muted-foreground mb-1 block">Investment Plan</label>
+          <select {...regForm.register("plan")}
+            className="w-full rounded-lg border border-border bg-background text-foreground px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-primary/30">
+            {plans.map(p => <option key={p.name} value={p.name}>{p.name} Plan — {p.minDeposit} min.</option>)}
+          </select>
+        </div>
+        <Button type="submit" className="w-full">Create Account</Button>
+      </form>
+    )}
+    <p className="text-center text-xs text-muted-foreground mt-4">
+      {tab === "login" ? "Don't have an account? " : "Already have an account? "}
+      <button onClick={() => { setTab(tab === "login" ? "register" : "login"); setError(""); }} className="text-primary hover:underline font-medium">
+        {tab === "login" ? "Register" : "Sign in"}
+      </button>
+    </p>
+  </motion.div>
+</div>
+);
+}
+
+// ==========================================
+// User Dashboard Panel
+// ==========================================
+function UserDashboard({ open, onClose }: { open: boolean; onClose: () => void }) {
+const { user, logout, addTransaction } = useAuth();
+const [view, setView] = useState<"home" | "deposit" | "withdraw">("home");
+const [amount, setAmount] = useState("");
+const [note, setNote] = useState("");
+const [submitting, setSubmitting] = useState(false);
+
+const handleAction = (type: "deposit" | "withdrawal") => {
+const val = parseFloat(amount.replace(/,/g, ""));
+if (!val || val <= 0) return;
+setSubmitting(true);
+setTimeout(() => {
+addTransaction(type, val, note || undefined);
+setAmount("");
+setNote("");
+setSubmitting(false);
+setView("home");
+}, 1200);
+};
+
+if (!open || !user) return null;
+
+return (
+<div className="fixed inset-0 z-[150] flex justify-end">
+<div className="absolute inset-0 bg-background/70 backdrop-blur-sm" onClick={onClose} />
+<motion.div
+initial={{ x: "100%" }}
+animate={{ x: 0 }}
+exit={{ x: "100%" }}
+transition={{ type: "spring", damping: 28, stiffness: 280 }}
+className="relative w-full max-w-sm bg-card border-l border-border h-full overflow-y-auto shadow-2xl z-10 flex flex-col"
+>
+{/* Header */}
+<div className="flex items-center justify-between px-5 py-4 border-b border-border">
+<div className="flex items-center gap-3">
+<div className="w-9 h-9 rounded-full bg-primary/20 border border-primary/30 flex items-center justify-center text-xs font-bold text-primary">
+{user.name.split(" ").map(n => n[0]).join("").slice(0, 2)}
+</div>
+<div>
+<p className="text-sm font-bold text-foreground leading-none">{user.name}</p>
+<p className="text-xs text-muted-foreground mt-0.5">{user.plan} Plan</p>
+</div>
+</div>
+<button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X className="h-5 w-5" /></button>
+</div>
+
+    <div className="flex-1 px-5 py-5 space-y-5">
+      {view === "home" && (
+        <>
+          {/* Balance Card */}
+          <div className="rounded-xl bg-gradient-to-br from-primary/20 to-primary/5 border border-primary/20 p-5">
+            <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Portfolio Balance</p>
+            <p className="text-3xl font-display font-bold text-foreground">${user.balance.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+            <p className="text-xs text-primary mt-2 font-medium">{user.plan} Plan · Active</p>
+          </div>
+          {/* Quick Actions */}
+          <div className="grid grid-cols-2 gap-3">
+            <button onClick={() => setView("deposit")}
+              className="flex flex-col items-center gap-2 p-4 rounded-xl border border-border hover:border-emerald-500/40 hover:bg-emerald-500/5 transition-colors">
+              <ArrowDownCircle className="h-6 w-6 text-emerald-400" />
+              <span className="text-sm font-medium text-foreground">Deposit</span>
+            </button>
+            <button onClick={() => setView("withdraw")}
+              className="flex flex-col items-center gap-2 p-4 rounded-xl border border-border hover:border-amber-500/40 hover:bg-amber-500/5 transition-colors">
+              <ArrowUpCircle className="h-6 w-6 text-amber-400" />
+              <span className="text-sm font-medium text-foreground">Withdraw</span>
+            </button>
+          </div>
+          {/* Stats row */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="rounded-xl border border-border p-4">
+              <p className="text-xs text-muted-foreground mb-1">Total Deposits</p>
+              <p className="text-base font-bold text-emerald-400">
+                ${user.transactions.filter(t => t.type === "deposit").reduce((a, t) => a + t.amount, 0).toLocaleString()}
+              </p>
+            </div>
+            <div className="rounded-xl border border-border p-4">
+              <p className="text-xs text-muted-foreground mb-1">Total With
+9 hours ago
+Yes, also add pop up notifications for deposits and withdrawals on the platform so clients will see convenience to work with me, make it professional and make or create reliable portal or clients dashboard when they click on their portfolio. Also Add an admin view inside the admin panel (/admin) that shows all registered users with their balances, plan, referral counts, and the ability to manually adjust balances or approve withdrawals, and only admin or support would have access to edit their balances.
+
+9 hours ago
+Yes, and create a landing page or dashboard/account menu that's shows your profile in the platform where their profits and deposits are displayed, not back to the first landing panel without a display of profile created. Include a contact support portal and make a background mixed up of crypto signals chart on real live time, add video signal on website, make it very sharp and professional. And created or @2026 to found since 2013 then send me the entire code of my platform in a copy and paste.
+
+9 hours ago
+Yes, and also create a portal or dashboard that will give clients options when they click on the withdraw, to give options of withdrawal account details, cryptocurrency or bank transactions. Let it bring up a payment method option for them to choose the beneficiary account details for the withdrawal. Everything should be in real time and professional. Whatever thing you know that will build a reliable and secure, well designed
